@@ -36,10 +36,10 @@ use crate::regex_helper::{pattern_has_uppercase_char, pattern_matches_strings_wi
 // We use jemalloc for performance reasons, see https://github.com/sharkdp/fd/pull/481
 // FIXME: re-enable jemalloc on macOS, see comment in Cargo.toml file for more infos
 #[cfg(all(
-    not(windows),
-    not(target_os = "android"),
-    not(target_os = "macos"),
-    not(target_env = "musl")
+not(windows),
+not(target_os = "android"),
+not(target_os = "macos"),
+not(target_env = "musl")
 ))]
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -54,14 +54,17 @@ fn run() -> Result<ExitCode> {
     let matches = app::build_app().get_matches_from(env::args_os());
 
     // Set the current working directory of the process
+    // 获取并设置程序当前工作路径
     if let Some(base_directory) = matches.value_of_os("base-directory") {
         let base_directory = Path::new(base_directory);
+        // 判断路径是否为合法，是否是一个目录
         if !filesystem::is_existing_directory(base_directory) {
             return Err(anyhow!(
                 "The '--base-directory' path '{}' is not a directory.",
                 base_directory.to_string_lossy()
             ));
         }
+        // 为程序设置工作目录
         env::set_current_dir(base_directory).with_context(|| {
             format!(
                 "Could not set '{}' as the current working directory",
@@ -70,7 +73,9 @@ fn run() -> Result<ExitCode> {
         })?;
     }
 
+    // 声明程序当前相对路径 '.'
     let current_directory = Path::new(".");
+    // 判断当前路径是否还存在
     if !filesystem::is_existing_directory(current_directory) {
         return Err(anyhow!(
             "Could not retrieve current directory (has it been deleted?)."
@@ -78,6 +83,7 @@ fn run() -> Result<ExitCode> {
     }
 
     // Get the search pattern
+    // 获取程序查询参数
     let pattern = matches
         .value_of_os("pattern")
         .map(|p| {
@@ -88,10 +94,14 @@ fn run() -> Result<ExitCode> {
         .unwrap_or("");
 
     // Get one or more root directories to search.
+    // 获取一个或多个要搜索的根目录
+    // passed_arguments 实现了 iter!!!
     let passed_arguments = matches
         .values_of_os("path")
+        // 如果 'path' 参数不存在，则获取 'search-path' 参数
         .or_else(|| matches.values_of_os("search-path"));
 
+    // 根据参数获取要搜索的目录, 否则以当前路径作为搜索目录
     let mut search_paths = if let Some(paths) = passed_arguments {
         let mut directories = vec![];
         for path in paths {
@@ -116,6 +126,7 @@ fn run() -> Result<ExitCode> {
         return Err(anyhow!("No valid search paths given."));
     }
 
+    // 如果指定了 'absolute-path' 参数， 则讲搜索路径转换为绝对路径
     if matches.is_present("absolute-path") {
         search_paths = search_paths
             .iter()
@@ -129,6 +140,7 @@ fn run() -> Result<ExitCode> {
     }
 
     // Detect if the user accidentally supplied a path instead of a search pattern
+    // 判断用户指定目录是否提供了 'full-path' 关键字
     if !matches.is_present("full-path")
         && pattern.contains(std::path::MAIN_SEPARATOR)
         && Path::new(pattern).is_dir()
@@ -145,6 +157,7 @@ fn run() -> Result<ExitCode> {
         ));
     }
 
+    // 获取构建正则表达式
     let pattern_regex = if matches.is_present("glob") && !pattern.is_empty() {
         let glob = GlobBuilder::new(pattern).literal_separator(true).build()?;
         glob.regex().to_owned()
@@ -157,32 +170,37 @@ fn run() -> Result<ExitCode> {
 
     // The search will be case-sensitive if the command line flag is set or
     // if the pattern has an uppercase character (smart case).
+    // 如果设置了 'ignore-case' 或者包含大写字符，则区分大小写
     let case_sensitive = !matches.is_present("ignore-case")
         && (matches.is_present("case-sensitive") || pattern_has_uppercase_char(&pattern_regex));
 
     #[cfg(windows)]
-    let ansi_colors_support =
+        let ansi_colors_support =
         ansi_term::enable_ansi_support().is_ok() || std::env::var_os("TERM").is_some();
 
+    // 排除 windows
     #[cfg(not(windows))]
-    let ansi_colors_support = true;
+        let ansi_colors_support = true;
 
+    // 是否是标准输出，用来判断是否实在终端的？有点不能理解这里 TODO
     let interactive_terminal = atty::is(Stream::Stdout);
+    // 根据 'color' 参数的值、平台以及环境变量选择是否彩色输出
     let colored_output = match matches.value_of("color") {
         Some("always") => true,
         Some("never") => false,
         _ => ansi_colors_support && env::var_os("NO_COLOR").is_none() && interactive_terminal,
     };
 
+    // 或缺分隔符， 默认为小写平台分隔符
     let path_separator = matches
         .value_of("path-separator")
         .map_or_else(filesystem::default_path_separator, |s| Some(s.to_owned()));
 
     #[cfg(windows)]
-    {
-        if let Some(ref sep) = path_separator {
-            if sep.len() > 1 {
-                return Err(anyhow!(
+        {
+            if let Some(ref sep) = path_separator {
+                if sep.len() > 1 {
+                    return Err(anyhow!(
                     "A path separator must be exactly one byte, but \
                  the given separator is {} bytes: '{}'.\n\
                  In some shells on Windows, '/' is automatically \
@@ -190,26 +208,31 @@ fn run() -> Result<ExitCode> {
                     sep.len(),
                     sep
                 ));
+                };
             };
-        };
-    }
+        }
 
+    // 如果输出需要颜色， 从环境变量读取颜色配置， 如果没有，则使用默认颜色配置
     let ls_colors = if colored_output {
         Some(LsColors::from_env().unwrap_or_else(|| LsColors::from_string(DEFAULT_LS_COLORS)))
     } else {
         None
     };
 
+
     let command = if let Some(args) = matches.values_of("exec") {
+        // 在每条搜索结果之后执行一个命令: 'exec' 指定的命令
         Some(CommandTemplate::new(args, path_separator.clone()))
     } else if let Some(args) = matches.values_of("exec-batch") {
+        // 在所有结果搜索完成后执行一次命令: 'exec-batch'  指定的命令
         Some(CommandTemplate::new_batch(args, path_separator.clone())?)
     } else if matches.is_present("list-details") {
+        // 以列表形式详细输出搜索结果
         let color = matches.value_of("color").unwrap_or("auto");
         let color_arg = ["--color=", color].concat();
 
         #[allow(unused)]
-        let gnu_ls = |command_name| {
+            let gnu_ls = |command_name| {
             // Note: we use short options here (instead of --long-options) to support more
             // platforms (like BusyBox).
             vec![
@@ -290,17 +313,20 @@ fn run() -> Result<ExitCode> {
         None
     };
 
+    // 根据 'size' 参数， 设置搜索的大小过滤条件
     let size_limits = if let Some(vs) = matches.values_of("size") {
         vs.map(|sf| {
             SizeFilter::from_string(sf)
                 .ok_or_else(|| anyhow!("'{}' is not a valid size constraint. See 'fd --help'.", sf))
         })
-        .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>>>()?
     } else {
         vec![]
     };
 
+    // 当前系统时间
     let now = time::SystemTime::now();
+    // 根据 'changed-within' 参数的值， 设置搜索包含的时间范围, [0 , now + t]
     let mut time_constraints: Vec<TimeFilter> = Vec::new();
     if let Some(t) = matches.value_of("changed-within") {
         if let Some(f) = TimeFilter::after(&now, t) {
@@ -312,6 +338,8 @@ fn run() -> Result<ExitCode> {
             ));
         }
     }
+
+    // 与 'changed-within' 类似 : [now - t, now]
     if let Some(t) = matches.value_of("changed-before") {
         if let Some(f) = TimeFilter::before(&now, t) {
             time_constraints.push(f);
@@ -324,12 +352,13 @@ fn run() -> Result<ExitCode> {
     }
 
     #[cfg(unix)]
-    let owner_constraint = if let Some(s) = matches.value_of("owner") {
+        let owner_constraint = if let Some(s) = matches.value_of("owner") {
         OwnerFilter::from_string(s)?
     } else {
         None
     };
 
+    // 其他参数解析
     let config = Options {
         case_sensitive,
         search_full_path: matches.is_present("full-path"),

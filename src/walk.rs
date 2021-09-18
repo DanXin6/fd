@@ -46,15 +46,21 @@ pub const MAX_BUFFER_LENGTH: usize = 1000;
 /// If the `--exec` argument was supplied, this will create a thread pool for executing
 /// jobs in parallel from a given command line and the discovered paths. Otherwise, each
 /// path will simply be written to standard output.
+/// path_vec 需要搜索的起始路径集合
+/// pattern 匹配模式
+/// config 搜索设置
 pub fn scan(path_vec: &[PathBuf], pattern: Arc<Regex>, config: Arc<Options>) -> Result<ExitCode> {
+    // 获取路径集合的迭代器
     let mut path_iter = path_vec.iter();
     let first_path_buf = path_iter
         .next()
         .expect("Error: Path vector can not be empty");
     let (tx, rx) = channel();
 
+    // 获取全局覆盖路径，这个作用与 ignore 类似，可以用来排除某些路径
     let mut override_builder = OverrideBuilder::new(first_path_buf.as_path());
 
+    // 在搜索范围内排除某些路径
     for pattern in &config.exclude_patterns {
         override_builder
             .add(pattern)
@@ -64,6 +70,7 @@ pub fn scan(path_vec: &[PathBuf], pattern: Arc<Regex>, config: Arc<Options>) -> 
         .build()
         .map_err(|_| anyhow!("Mismatch in exclude patterns"))?;
 
+    // 从起始路径开始，创建一个目录迭代器
     let mut walker = WalkBuilder::new(first_path_buf.as_path());
     walker
         .hidden(config.ignore_hidden)
@@ -130,6 +137,7 @@ pub fn scan(path_vec: &[PathBuf], pattern: Arc<Regex>, config: Arc<Options>) -> 
 
     let parallel_walker = walker.threads(config.threads).build_parallel();
 
+    // 退出信号量
     let wants_to_quit = Arc::new(AtomicBool::new(false));
     if config.ls_colors.is_some() && config.command.is_none() {
         let wq = Arc::clone(&wants_to_quit);
@@ -145,12 +153,15 @@ pub fn scan(path_vec: &[PathBuf], pattern: Arc<Regex>, config: Arc<Options>) -> 
     }
 
     // Spawn the thread that receives all results through the channel.
+    // 创建结果接收线程
     let receiver_thread = spawn_receiver(&config, &wants_to_quit, rx);
 
     // Spawn the sender threads.
+    // 创建结果发送线程
     spawn_senders(&config, &wants_to_quit, pattern, parallel_walker, tx);
 
     // Wait for the receiver thread to print out all results.
+    // 阻塞， 等待线程打印完所有结果
     let exit_code = receiver_thread.join().unwrap();
 
     if wants_to_quit.load(Ordering::Relaxed) {
@@ -349,21 +360,29 @@ fn spawn_senders(
         let tx_thread = tx.clone();
         let wants_to_quit = Arc::clone(wants_to_quit);
 
+        // 闭包原来还能直接放在堆上？！！！！
+        // 可是，这个参数是怎么来的？？？？？
+        // 直接把 tx 拿来用了？？？？？？？
         Box::new(move |entry_o| {
             if wants_to_quit.load(Ordering::Relaxed) {
                 return ignore::WalkState::Quit;
             }
 
+            // 获取工作目录
             let entry = match entry_o {
+                // 跳过根目录
                 Ok(ref e) if e.depth() == 0 => {
                     // Skip the root directory entry.
                     return ignore::WalkState::Continue;
                 }
+                // 目录
                 Ok(e) => DirEntry::Normal(e),
+                //
                 Err(ignore::Error::WithPath {
                     path,
                     err: inner_err,
                 }) => match inner_err.as_ref() {
+                    // IO 错误， 路径损坏，反正就是没法读了
                     ignore::Error::Io(io_error)
                         if io_error.kind() == io::ErrorKind::NotFound
                             && path
@@ -384,6 +403,7 @@ fn spawn_senders(
                     }
                 },
                 Err(err) => {
+                    // 如果 接收者已经失效，就会发送失败，此时程序直接退出
                     return match tx_thread.send(WorkerResult::Error(err)) {
                         Ok(_) => ignore::WalkState::Continue,
                         Err(_) => ignore::WalkState::Quit,
@@ -391,6 +411,7 @@ fn spawn_senders(
                 }
             };
 
+            // 判断当前深度是否已经超过限制深度
             if let Some(min_depth) = config.min_depth {
                 if entry.depth().map_or(true, |d| d < min_depth) {
                     return ignore::WalkState::Continue;

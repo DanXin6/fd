@@ -30,12 +30,16 @@ impl SizeFilter {
             return None;
         }
 
+        // 正则匹配获取值
         let captures = SIZE_CAPTURES.captures(s)?;
+        // 获取第一个字符， 表示文件与限制的关系， '>' '=' '<'
         let limit_kind = captures.get(1).map_or("+", |m| m.as_str());
+        // 限制大小，是一个数值
         let quantity = captures
             .get(2)
             .and_then(|v| v.as_str().parse::<u64>().ok())?;
 
+        // 单位
         let multiplier = match &captures.get(3).map_or("b", |m| m.as_str()).to_lowercase()[..] {
             v if v.starts_with("ki") => KIBI,
             v if v.starts_with('k') => KILO,

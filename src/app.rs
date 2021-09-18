@@ -8,14 +8,20 @@ pub fn build_app() -> App<'static, 'static> {
     };
 
     let mut app = App::new("fd")
+        // 奢者 Cargo.toml 中指定的版本
         .version(crate_version!())
+        // usage 提示语设置
         .usage("fd [FLAGS/OPTIONS] [<pattern>] [<path>...]")
+        // 配置设置
         .setting(clap_color_setting)
+        // 设置现实顺序， 按照参数设置参数显示
         .setting(AppSettings::DeriveDisplayOrder)
+        // 帮助信息
         .after_help(
             "Note: `fd -h` prints a short and concise overview while `fd --help` gives all \
                  details.",
         )
+        // 设置参数及其说明
         .arg(
             Arg::with_name("hidden")
                 .long("hidden")
